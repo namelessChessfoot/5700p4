@@ -1,0 +1,5 @@
+.vscode/
+__pycache__/
+rubbish
+draft.py
+client
