@@ -6,6 +6,7 @@ from MyIP import ip_send, IPReceiver
 import random
 from datetime import datetime
 from collections import deque
+import heapq
 
 
 def build_tcp_header(sp, dp, seqnum, acknum, offset, urg, ack, psh, rst, syn, fin, window, cksum, urptr):
@@ -78,7 +79,41 @@ def connect(src_port, dst_ip, dst_port, receiver: IPReceiver):
     return my_seq, server_seq, server_seq, my_seq
 
 
-def tcp_process(data: bytes, dst_ip: str, dst_port: int):
+class SendBuffer():
+    delay = 3
+
+    def __init__(self) -> None:
+        self.pq = []
+        self.buf = {}
+
+    def push(self, seq, data):
+        heapq.heappush(self.pq, (time.time()-self.delay-5, seq))
+        self.buf[seq] = data
+
+    def clear(self):
+        while len(self.pq) and self.pq[0][1] not in self.buf:
+            heapq.heappop(self.pq)
+
+    def confirm(self, seq):
+        if seq in self.buf:
+            self.buf.pop(seq)
+            self.clear()
+
+    def size(self):
+        return len(self.buf)
+
+    def get(self):
+        seq = heapq.heappop(self.pq)[1]
+        data = self.buf[seq]
+        heapq.heappush(self.pq, (time.time(), seq))
+        self.clear()
+        return seq, data
+
+    def should_send(self):
+        return len(self.buf) and time.time()-self.pq[0][0] > self.delay
+
+
+def tcp_process(data_out: bytes, dst_ip: str, dst_port: int):
     src_port = random.randint(5000, 60000)
     print(src_port)
     # src_port = 12345  # TODO for test
@@ -90,23 +125,23 @@ def tcp_process(data: bytes, dst_ip: str, dst_port: int):
     my_seq, server_seq, my_ack, server_ack = res
     my_fin, server_fin = False, False
     ptr = 0
-    buf = {}
+    send_buf = SendBuffer()
+    recv_buf = {}
     ret = []
-    bc = 0
+    debug_bc = 0
     pending_acks = deque()
+    pending_sends = deque([data_out])
     start = last = time.time()
-    while (not my_fin) or (not server_fin) or len(pending_acks) or server_ack < my_seq or ptr < len(data):
-        if time.time()-last > 30:
+    while (not my_fin) or (not server_fin) or len(pending_acks) or server_ack < my_seq or ptr < len(data_out):
+        if time.time()-last > 3:
             last = time.time()
-            print(f"total {int(last-start)} {bc/1024}KB downloaded")
+            print(f"total {int(last-start)} {debug_bc/1024}KB downloaded")
         # send
         # receive
         # consume
-        # logs = [
-        #     f"{datetime.now()} myseq={my_seq}, serverack={server_ack}, serverseq={server_seq}, myack={my_ack}"]
-        while ptr < len(data) or len(pending_acks) or (not my_fin):
-            seg = data[ptr:]
-            ptr = len(data)
+        while ptr < len(data_out) or len(pending_acks) or (not my_fin):
+            seg = data_out[ptr:]
+            ptr = len(data_out)
             fin_bit = 0
             if len(seg) == 0 and (not my_fin):
                 fin_bit = 1
@@ -116,7 +151,6 @@ def tcp_process(data: bytes, dst_ip: str, dst_port: int):
                 next_ack = pending_acks.popleft()
             tcp_simple_send(seg, src_port, dst_ip, dst_port,
                             (0, 1, 0, 0, 0, fin_bit), my_seq, next_ack)
-            # logs.append(f"  <<send {len(seg)} bytes, ack={next_ack}")
             my_ack = max(my_ack, next_ack)
             if len(seg):
                 my_seq += len(seg)
@@ -133,34 +167,26 @@ def tcp_process(data: bytes, dst_ip: str, dst_port: int):
             if sp != dst_port or dp != src_port:
                 continue
             if server_seq <= seq:
-                buf[seq] = (ack, control, window, data_in)
-                # logs.append(f"    >>receive {len(data_in)} start from {seq}")
+                recv_buf[seq] = (ack, control, window, data_in)
             else:
-                # logs.append(f"    f*ck got retransmit {seq}")
                 pending_acks.append(seq+len(data_in))
 
-        while server_seq in buf:
+        while server_seq in recv_buf:
             server_seq_ini = server_seq
-            (ack, control, window, data_in) = buf.pop(server_seq)
+            (ack, control, window, data_in) = recv_buf.pop(server_seq)
             if len(data_in):
                 ret.append(data_in)
-                bc += len(data_in)
-            # logs.append(f"    >>consume {server_seq}")
+                debug_bc += len(data_in)
             server_seq += len(data_in)
             u, a, p, r, s, f = control
             if a:
-                # TODO should remove entries from sending buffer one by one
                 server_ack = max(server_ack, ack)
+                send_buf.confirm(ack)
             if f:
                 server_seq += 1
                 server_fin = True
             if server_seq != server_seq_ini:
                 pending_acks.append(server_seq)
-        # buf_report = "buf: "+(" ".join(map(lambda i: str(i), buf)))
-        # logs.append(buf_report)
-        # if len(logs) > 2:
-        #     for l in logs:
-        #         print(l)
     print(f"done! {time.time()-start}s")
     return ret
 
