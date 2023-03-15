@@ -1,6 +1,6 @@
 #! /usr/bin/env python3
 from urllib.parse import urlparse
-from MyTCP import tcp_process
+from MyTCP import TCP
 import socket
 
 
@@ -45,17 +45,30 @@ class MyHttp():
         print(ip)
         path = pr.path
         message = self.build_message("GET", url)
-        res = tcp_process(message.encode(), ip, 80)
+
+        tcp = TCP(ip, 80)
+        res = tcp.tcp_process(message.encode())
+
         data = b"".join(res)
         name = path.split("/")[-1]
         if len(name) == 0:
-            name = "index.html"
-        with open(f"{name}", "wb") as f:
-            f.write(data.split(b"\r\n\r\n")[-1])
+            with open(f"index.html", "w") as f:
+                k = '\r\n\r\n'
+                data = data.decode()
+                p = data.find(k)
+                content = data[p+len(k):]
+                f.write(content)
+        else:
+            with open(f"{name}", "wb") as f:
+                k = b'\r\n\r\n'
+                p = data.find(k)
+                content = data[p+len(k):]
+                f.write(content)
 
 
 two = "http://david.choffnes.com/classes/cs5700f22/2MB.log"
 ten = "http://david.choffnes.com/classes/cs5700f22/10MB.log"
-webpage = "http://www.khoury.northeastern.edu"
+fifty = "http://david.choffnes.com/classes/cs5700f22/50MB.log"
+webpage = "http://david.choffnes.com/classes/cs5700f22/"
 http = MyHttp()
-http.get(two)
+http.get(fifty)
