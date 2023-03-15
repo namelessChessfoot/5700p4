@@ -5,70 +5,73 @@ import socket
 
 
 class MyHttp():
-    # Responsible for send, recv,
-    # and request, which is a combination of send and recv
-    # manage the cookie as well
+    '''
+        Send a GET message, format the response, and save it.
+    '''
     NEWLINE = "\r\n"
 
-    @classmethod
-    def build_initial(cls, method: str, path: str = "/") -> str:
-        return f"{method} {path} HTTP/1.1{cls.NEWLINE}"
-
-    def build_header(self, header_dict: dict):
+    def build_get_message(self) -> str:
+        '''
+            Build a GET message.
+            Parameters:
+                none
+            Returns:
+                The message with str type
+        '''
+        header_dict = {}
+        header_dict["Host"] = self.pr.netloc
         header_dict["connection"] = "keep-alive"
-        ret = ""
-        for h, v in header_dict.items():
-            ret += f"{h}: {v}{self.NEWLINE}"
-        return ret
+        header_dict["content-length"] = "0"
+        header = self.NEWLINE.join(
+            map(lambda item: f"{item[0]}: {item[1]}", header_dict.items()))
+        return f"GET {self.pr.path} HTTP/1.1{self.NEWLINE}{header}{self.NEWLINE*2}"
 
-    @classmethod
-    def build_body(cls, body_dict: dict):
-        ret = ""
-        for k, v in body_dict.items():
-            if len(ret) > 0:
-                ret += "&"
-            ret += f"{k}={v}"
-        return ret
-
-    def build_message(self, method: str, url: str, header_dict: dict = {}, body_dict: dict = {}) -> str:
-        pr = urlparse(url)
-        header_dict["Host"] = pr.netloc
-
-        body = self.build_body(body_dict)
-        header_dict["content-length"] = str(len(body))
-
-        return f"{self.build_initial(method,pr.path)}{self.build_header(header_dict)}{self.NEWLINE}{body}"
-
-    def get(self, url):
-        pr = urlparse(url)
-        ip = socket.gethostbyname(pr.netloc)
-        print(ip)
-        path = pr.path
-        message = self.build_message("GET", url)
-
+    def get(self, url: str) -> int:
+        '''
+            Download a resource with a URL.
+            Parameters:
+                url: the URL of the resource
+            Returns:
+                The number of bytes written to the output file.
+                If an invalid message is received, returns -1 and does not create any file
+        '''
+        self.pr = urlparse(url)
+        ip = socket.gethostbyname(self.pr.netloc)
+        path = self.pr.path
+        message = self.build_get_message()
         tcp = TCP(ip, 80)
         res = tcp.tcp_process(message.encode())
 
+        CRLF = self.NEWLINE.encode()
         data = b"".join(res)
+        seperator = CRLF*2
+        p = data.find(seperator)
+        header = data[:p].decode()
+        payload = data[p+len(seperator):]
+
+        if "200" not in header:
+            print('Got a non-200 response')
+            print(header)
+            return
+        if "Transfer-Encoding: chunked" in header:
+            lst = payload.split(CRLF)
+            tmp = b""
+            for i in range(0, len(lst), 2):
+                length = int(lst[i].decode(), 16)
+                if length == 0:
+                    break
+                if length != len(lst[i+1]):
+                    print("Bad chunked encoding format")
+                    return -1
+                tmp += lst[i+1]
+            payload = tmp
+
         name = path.split("/")[-1]
         if len(name) == 0:
             with open(f"index.html", "w") as f:
-                k = '\r\n\r\n'
-                data = data.decode()
-                p = data.find(k)
-                content = data[p+len(k):]
-                f.write(content)
+                f.write(payload.decode())
         else:
             with open(f"{name}", "wb") as f:
-                k = b'\r\n\r\n'
-                p = data.find(k)
-                content = data[p+len(k):]
-                f.write(content)
+                f.write(payload)
 
-
-two = "http://david.choffnes.com/classes/cs5700f22/2MB.log"
-ten = "http://david.choffnes.com/classes/cs5700f22/10MB.log"
-fifty = "http://david.choffnes.com/classes/cs5700f22/50MB.log"
-webpage = "http://david.choffnes.com/classes/cs5700f22/"
-http = MyHttp()
-http.get(fifty)
+        return len(payload)

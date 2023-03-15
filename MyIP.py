@@ -9,6 +9,11 @@ from MyChallenge import EtherSend
 
 class IPSender():
     def __init__(self, dst: str) -> None:
+        '''
+            Initializes an IPSender object.
+            Has a socket and an EtherSend
+            By modifying self.take_challenge, the end point that sends bytes can be switched
+        '''
         self.ip = socket.gethostbyname(f"{socket.gethostname()}.local")
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_RAW,
                                   socket.IPPROTO_RAW)
@@ -16,7 +21,14 @@ class IPSender():
         self.es = EtherSend()
         self.take_challenge = True
 
-    def build_ip_header(self, id, more: bool, data_length, fragment_offset, cksum):
+    def build_ip_header(self, id: int, more: bool, data_length: int, fragment_offset: int, cksum: int) -> bytes:
+        '''
+            Builds an IP header
+            Parameters:
+                All of them are the fields in an IP header
+            Returns:
+                The header in bytes
+        '''
         version = 4
         ihl = 5
         ver_ihl = (version << 4) + ihl
@@ -36,42 +48,69 @@ class IPSender():
         return header
 
     def send(self, data: bytes):
+        '''
+            Sends data via either socket or EtherSend, depending on self.take_challenge
+            Supports splitting a large packet into several small ones
+            Parameters:
+                data: data in bytes
+            Returns:
+                none
+        '''
         length = len(data)
         mtu = 8*100  # can be optimized
         start = 0
-        id = random.randint(0, 60000)
+        id = random.randint(0, 65535)
         while start < length:
             end = start + mtu
             payload = data[start:end]
-            header = self.build_ip_header(
-                id, end < length, len(payload), start//8, 0)
-            header = self.build_ip_header(
-                id, end < length, len(payload), start//8, int.from_bytes(checksum(header), "big"))
+
+            args = [id, end < length, len(payload), start//8, 0]
+            header = self.build_ip_header(*args)
+            args[4] = int.from_bytes(checksum(header), "big")
+            header = self.build_ip_header(*args)
+
             packet = header+payload
             if self.take_challenge:
                 self.es.ip_send(packet)
             else:
                 self.sock.sendto(packet, (self.dst, 0))
-
             start = end
 
 
 class IPReceiver():
-    def __init__(self, timeout=0.0001) -> None:
+    def __init__(self, ) -> None:
+        '''
+            Initializes an IPReceiver object.
+            This is a non-block receiver.
+
+            It receives packets with self.recv() and put them into self.container
+            It assembles packets with self.consume(). If a packet is completed, it will be put into self.q
+
+            The upperlevel layer can get completed IP packets from self.q
+        '''
         self.ip = socket.gethostbyname(f"{socket.gethostname()}.local")
         self.sock = socket.socket(
             socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_TCP)
-        self.sock.settimeout(timeout)
+        self.sock.settimeout(0.0001)
         self.container = {}
         self.q = deque()
         self.last_recv = time.time()
 
-    def consume(self, id, more, offset, data):
-        # each element in container is [length,[(offset,data)...]]
+    def consume(self, id: int, more: bool, offset: int, data: bytes):
+        '''
+            Takes in positional information of packets and assembles them.
+            Each element in container is [length,[(offset,data)...]]
+            This method assumes that all the incoming data and related information are correct
+
+            Parameters:
+                id, more, offset: positional information of data
+                data: data in bytes
+            Returns:
+                none
+        '''
         if id not in self.container:
             self.container[id] = [-1, []]
         self.container[id][1].append((offset*8, data))
-        # assume all the offset and data are correct
         if not more:
             self.container[id][0] = offset*8+len(data)
         if self.container[id][0] == -1:
@@ -91,7 +130,15 @@ class IPReceiver():
         self.container.pop(id)
 
     def parse_ip_header(self, header: bytes):
-        # Only returns the fields I concern
+        '''
+            Parse an IP header
+
+            Parameters:
+                header: IP header in bytes
+            Returns:
+                id, more, offset, protocol, src, dst: fields in an IP header if this is a valid IP packet
+                none: if this packet is invalid
+        '''
         id = 0
         more = False
         protocol = 0
@@ -107,7 +154,16 @@ class IPReceiver():
         dst = socket.inet_ntoa(dst)
         return id, more, offset, protocol, src, dst
 
-    def recv(self, expect_src, timeout):
+    def recv(self, expect_src: str, timeout):
+        '''
+            Receives packets for a while. Packets are given to self.consume()
+
+            Parameters:
+                expect_src: as its name
+                timeout: the maximum receiving time
+            Returns:
+                none
+        '''
         start = time.time()
         while time.time()-start < timeout:
             try:
@@ -117,7 +173,7 @@ class IPReceiver():
                     continue
                 if time.time()-self.last_recv > 180:
                     print("Connection failed")
-                    quit()
+                    exit()
                 self.last_recv = time.time()
                 res = self.ip_packet_split(packet)
                 if not res:
@@ -135,7 +191,14 @@ class IPReceiver():
                 break
 
     def ip_packet_split(self, packet: bytes):
-        # Returns valid split
+        '''
+            Splits an IP packet into a header and a body
+
+            Parameters:
+                packet: IP packet in bytes
+            Returns:
+                header, body: header and body in bytes
+        '''
         ver_ihl = int.from_bytes(packet[:1], "big")
         ver = ver_ihl >> 4
         if ver != 4:

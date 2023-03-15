@@ -5,6 +5,4 @@ draft.py
 client
 *.log
 *.html
-README.md
-rawhttpget
 scratch

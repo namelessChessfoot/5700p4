@@ -1,0 +1,14 @@
+#! /usr/bin/env python3
+import argparse
+from MyHttp import MyHttp
+
+'''
+    This program needs one argument: url, and downloads the web page or file.
+'''
+
+parser = argparse.ArgumentParser()
+parser.add_argument("url")
+args = parser.parse_args()
+
+http = MyHttp()
+http.get(args.url)
